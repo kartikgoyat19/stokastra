@@ -1,0 +1,676 @@
+import React, { useState, useEffect, useMemo } from "react";
+import { motion } from "framer-motion";
+import ReactApexChart from 'react-apexcharts';
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ComposedChart,
+  Bar,
+  CartesianGrid,
+} from "recharts";
+
+// Stokastra - Single-file React UI (ApexCharts candlestick upgrade)
+// - Replaces the custom Candle renderer with a real candlestick chart using react-apexcharts + apexcharts
+// - Adds skeleton loader when toggling to candlestick (mock API delay)
+// - Chart is responsive and has a date-range selector (1D, 7D, 1M, 3M)
+//
+// NOTE: Ensure these packages are installed in your project:
+// npm install recharts framer-motion react-apexcharts apexcharts
+
+export default function StokastraApp() {
+  // UI state
+  const [query, setQuery] = useState("");
+  const [tab, setTab] = useState("market");
+  const [dark, setDark] = useState(false);
+
+  // Wallet
+  const [walletAddress, setWalletAddress] = useState(null);
+  const [walletErr, setWalletErr] = useState(null);
+
+  // modal states
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalType, setModalType] = useState(""); // 'row' | 'news' | 'trade'
+  const [modalData, setModalData] = useState(null);
+  const [modalItem, setModalItem] = useState(null);
+  const [chartMode, setChartMode] = useState("sparkline"); // or 'candlestick'
+
+  // candlestick loading + range
+  const [candlestickLoading, setCandlestickLoading] = useState(false);
+  const [range, setRange] = useState('1D'); // '1D' | '7D' | '1M' | '3M'
+
+  // loading skeletons to simulate API delay
+  const [loadingMarket, setLoadingMarket] = useState(true);
+  const [loadingNews, setLoadingNews] = useState(true);
+
+  // mock data bundled
+  const baseChart = useMemo(() => generatePriceSeries(40, 15000), []);
+
+  const marketCards = [
+    { label: "NIFTY 50", value: "22,420.50", change: 0.92 },
+    { label: "SENSEX", value: "74,320.12", change: -0.41 },
+    { label: "USD / INR", value: "82.12", change: 0.1 },
+    { label: "Total Market Cap (INR)", value: "₹250T", change: 0.34 },
+  ];
+
+  const sampleStocks = useMemo(
+    () => [
+      makeStock("RELIANCE", "Reliance Industries Ltd", 2550.34),
+      makeStock("TCS", "Tata Consultancy Services", 3400.12),
+      makeStock("HDFCBANK", "HDFC Bank", 1523.45),
+      makeStock("INFY", "Infosys", 182.56),
+      makeStock("ICICIBANK", "ICICI Bank", 920.12),
+    ],
+    []
+  );
+
+  const sampleForex = useMemo(
+    () => [
+      makeForex("USD/INR", 82.12),
+      makeForex("EUR/INR", 89.45),
+      makeForex("GBP/INR", 103.12),
+    ],
+    []
+  );
+
+  // WATCHLIST
+  const watchlist = useMemo(() => [
+    { symbol: "RELIANCE", name: "Reliance Industries Ltd", change: 1.2 },
+    { symbol: "TCS", name: "Tata Consultancy Services", change: -0.6 },
+    { symbol: "NIFTY", name: "Nifty 50", change: 0.92 },
+  ], []);
+
+  const sampleNews = useMemo(
+    () => [
+      makeNews("RBI holds rates steady — what it means for markets", "The Reserve Bank of India kept policy rates unchanged today, which traders say will...", "Economic Times"),
+      makeNews("Reliance posts quarterly beat; stock rallies", "Reliance reported quarterly revenue and profit above estimates, driven by retail and digital segments.", "Mint"),
+      makeNews("Foreign inflows return to Indian equities", "FPIs have been net buyers over the last 3 sessions as global risk-on sentiment returns.", "Bloomberg Quint"),
+      makeNews("USD/INR dips after stronger rupee", "USD/INR dropped as domestic currency strengthened on positive capital flows.", "Business Standard"),
+      makeNews("IT exports season picks up momentum", "IT majors report strong deal wins this quarter — analysts optimistic.", "The Hindu BusinessLine"),
+    ],
+    []
+  );
+
+  const samplePosts = useMemo(
+    () => [
+      { id: 1, user: "TraderA", text: "Buying RELIANCE on dips. Targets 2700.", likes: 12, time: new Date().toISOString() },
+      { id: 2, user: "InvestorZ", text: "Long-term view on Infosys looks stable despite short-term volatility.", likes: 5, time: new Date().toISOString() },
+      { id: 3, user: "MacroPhil", text: "Keep an eye on USD/INR — RBI commentary could move it.", likes: 3, time: new Date().toISOString() },
+    ],
+    []
+  );
+
+  // simulate API delay
+  useEffect(() => {
+    const t = setTimeout(() => setLoadingMarket(false), 700);
+    const t2 = setTimeout(() => setLoadingNews(false), 1000);
+    return () => {
+      clearTimeout(t);
+      clearTimeout(t2);
+    };
+  }, []);
+
+  // wallet persistence
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("stokastra_wallet");
+      if (saved) setWalletAddress(saved);
+    } catch (e) {}
+  }, []);
+
+  // connect/disconnect
+  const connectWallet = async () => {
+    setWalletErr(null);
+    if (typeof window === "undefined" || !window.ethereum) {
+      setWalletErr("MetaMask not detected. Please install MetaMask.");
+      alert("Please install MetaMask to use wallet features.");
+      return;
+    }
+    try {
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+      if (accounts && accounts.length) {
+        setWalletAddress(accounts[0]);
+        localStorage.setItem("stokastra_wallet", accounts[0]);
+      }
+    } catch (err) {
+      setWalletErr(err?.message || String(err));
+    }
+  };
+  const disconnectWallet = () => {
+    setWalletAddress(null);
+    setWalletErr(null);
+    localStorage.removeItem("stokastra_wallet");
+  };
+
+  // search filtering
+  const filteredStocks = useMemo(() => {
+    if (!query) return sampleStocks;
+    return sampleStocks.filter((s) => s.symbol.toLowerCase().includes(query.toLowerCase()) || s.name.toLowerCase().includes(query.toLowerCase()));
+  }, [query, sampleStocks]);
+
+  const filteredForex = useMemo(() => {
+    if (!query) return sampleForex;
+    return sampleForex.filter((f) => f.pair.toLowerCase().includes(query.toLowerCase()));
+  }, [query, sampleForex]);
+
+  // open row modal
+  const openRowModal = (item) => {
+    // create realistic looking spark and OHLC
+    const spark = generatePriceSeries(20, (item.price ?? 1000) * (1 + (Math.random() - 0.5) * 0.02));
+    const ohlc = generateOHLCSeries(60, item.price ?? 1000); // more points for range selection
+    setModalItem({ ...item, spark, ohlc });
+    setChartMode("sparkline");
+    setModalType("row");
+    setModalOpen(true);
+  };
+
+  const openNewsModal = (news) => {
+    setModalData(news);
+    setModalType("news");
+    setModalOpen(true);
+  };
+
+  const openTradeModal = (item) => {
+    setModalItem(item);
+    setModalType("trade");
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setModalOpen(false);
+    setModalItem(null);
+    setModalData(null);
+  };
+
+  function truncate(a) {
+    if (!a) return "";
+    return a.slice(0, 6) + "..." + a.slice(-4);
+  }
+
+  // UI actions
+  const onReadMore = (news) => openNewsModal(news);
+  const onJoinDiscussion = (topic) => alert("Joined discussion: " + topic);
+  const onTradeClick = (item) => openTradeModal(item);
+
+  // Toggle to candlestick with a short shimmer loader to simulate API fetch
+  const toggleToCandlestick = () => {
+    setChartMode('candlestick');
+    setCandlestickLoading(true);
+    // simulate brief fetch
+    setTimeout(() => setCandlestickLoading(false), 700);
+  };
+
+  // Determine OHLC slice for selected range
+  const ohlcForRange = (ohlc, rangeKey) => {
+    if (!ohlc) return [];
+    const len = ohlc.length;
+    let n = 60;
+    switch (rangeKey) {
+      case '1D': n = Math.min(24, len); break;
+      case '7D': n = Math.min(40, len); break;
+      case '1M': n = Math.min(60, len); break;
+      case '3M': n = Math.min(60, len); break;
+      default: n = len;
+    }
+    return ohlc.slice(len - n);
+  };
+
+  // Apex options generator
+  const candlestickOptions = (ohlcSeries) => ({
+    chart: {
+      type: 'candlestick',
+      height: 300,
+      toolbar: { show: true, tools: { zoom: true, pan: true, reset: true } },
+    },
+    title: { text: '', style: { color: dark ? '#fff' : '#111827' } },
+    xaxis: { type: 'category', labels: { style: { colors: dark ? '#cbd5e1' : '#6b7280' } } },
+    yaxis: { tooltip: { enabled: true } },
+    tooltip: { theme: dark ? 'dark' : 'light' },
+    plotOptions: { candlestick: { colors: { upward: '#16a34a', downward: '#dc2626' } } },
+  });
+
+  const candlestickSeries = (ohlc) => [
+    { data: (ohlc || []).map((d) => ({ x: d.time, y: [d.open, d.high, d.low, d.close] })) }
+  ];
+
+  return (
+    <div className={"min-h-screen " + (dark ? "bg-slate-900 text-slate-100" : "bg-gray-50 text-slate-900")}>
+      <header className="max-w-6xl mx-auto p-4 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div className="text-2xl font-extrabold">Stokastra</div>
+          <div className="hidden md:flex items-center gap-2 text-sm text-slate-500">
+            <span className="px-2 py-1 rounded-md hover:bg-gray-100 cursor-pointer" onClick={() => setTab("market")}>Market</span>
+            <span className="px-2 py-1 rounded-md hover:bg-gray-100 cursor-pointer" onClick={() => setTab("stocks")}>Stocks</span>
+            <span className="px-2 py-1 rounded-md hover:bg-gray-100 cursor-pointer" onClick={() => setTab("forex")}>Forex</span>
+            <span className="px-2 py-1 rounded-md hover:bg-gray-100 cursor-pointer" onClick={() => setTab("community")}>Community</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="hidden sm:block w-64"><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search stocks, symbols or pairs" className="w-full rounded-lg p-2 border" /></div>
+          <button onClick={() => setDark((d) => !d)} className="px-3 py-2 rounded-md border">{dark ? "Light" : "Dark"}</button>
+
+          {!walletAddress ? (
+            <div className="flex items-center gap-2">
+              <button onClick={connectWallet} className="px-3 py-2 rounded-md border">Sign in</button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 border rounded-md px-3 py-1">
+              <div className="text-sm font-medium">{truncate(walletAddress)}</div>
+              <button onClick={disconnectWallet} className="text-xs px-2 py-1 rounded-md">Disconnect</button>
+            </div>
+          )}
+        </div>
+      </header>
+
+      <main className="max-w-6xl mx-auto p-4 grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <section className="lg:col-span-2 space-y-6">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={"rounded-2xl p-4 shadow-sm " + (dark ? "bg-slate-800" : "bg-white")}>
+            <div className="flex items-start justify-between">
+              <div>
+                <h1 className="text-xl font-bold">Indian Markets Overview</h1>
+                <p className="text-sm text-slate-500">Live snapshot — Sensex, Nifty, USD/INR and top movers (mock data)</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="text-sm text-slate-500">Updated just now</div>
+                <select className="p-2 rounded-md border bg-transparent text-sm">
+                  <option>1D</option>
+                  <option>1W</option>
+                  <option>1M</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {marketCards.map((c) => (
+                <div key={c.label} className="p-3 rounded-xl border flex flex-col">
+                  <div className="text-sm text-slate-500">{c.label}</div>
+                  <div className="text-xl font-semibold">{c.value}</div>
+                  <div className={"text-sm " + (c.change >= 0 ? "text-emerald-500" : "text-rose-500")}>{c.change >= 0 ? "+" : ""}{c.change}%</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-6 h-48">
+              {loadingMarket ? (
+                <div className="h-full w-full animate-pulse bg-gray-100 rounded" />
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={baseChart}>
+                    <XAxis dataKey="time" hide />
+                    <YAxis hide />
+                    <Tooltip />
+                    <Line type="monotone" dataKey="value" stroke="#6366F1" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </motion.div>
+
+          <div className={"rounded-2xl p-4 shadow-sm " + (dark ? "bg-slate-800" : "bg-white")}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Top Indian Stocks</h2>
+              <div className="text-sm text-slate-500">Sorted by market cap</div>
+            </div>
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-slate-500 text-left">
+                  <tr>
+                    <th className="p-2">#</th>
+                    <th className="p-2">Name</th>
+                    <th className="p-2">Price</th>
+                    <th className="p-2">Change</th>
+                    <th className="p-2">Market Cap</th>
+                    <th className="p-2">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredStocks.map((s, i) => (
+                    <tr key={s.symbol} className="border-t cursor-pointer hover:bg-gray-50" onClick={() => openRowModal(s)}>
+                      <td className="p-2">{i + 1}</td>
+                      <td className="p-2 font-medium">{s.name} <span className="text-xs text-slate-400">{s.symbol}</span></td>
+                      <td className="p-2">₹{s.price.toFixed(2)}</td>
+                      <td className={"p-2 " + (s.change >= 0 ? "text-emerald-500" : "text-rose-500")}>{s.change}%</td>
+                      <td className="p-2">{s.marketCap}</td>
+                      <td className="p-2">
+                        <button onClick={(e) => { e.stopPropagation(); onTradeClick(s); }} className="px-3 py-1 rounded bg-indigo-600 text-white text-sm">Trade</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className={"rounded-2xl p-4 shadow-sm " + (dark ? "bg-slate-800" : "bg-white")}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Forex</h2>
+              <div className="text-sm text-slate-500">Major pairs vs INR</div>
+            </div>
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-slate-500 text-left">
+                  <tr>
+                    <th className="p-2">Pair</th>
+                    <th className="p-2">Price</th>
+                    <th className="p-2">Change (24h)</th>
+                    <th className="p-2">Liquidity</th>
+                    <th className="p-2">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredForex.map((f) => (
+                    <tr key={f.pair} className="border-t cursor-pointer hover:bg-gray-50" onClick={() => openRowModal(f)}>
+                      <td className="p-2 font-medium">{f.pair}</td>
+                      <td className="p-2">{f.price}</td>
+                      <td className={"p-2 " + (f.change >= 0 ? "text-emerald-500" : "text-rose-500")}>{f.change}%</td>
+                      <td className="p-2">{f.liquidity}</td>
+                      <td className="p-2">
+                        <button onClick={(e) => { e.stopPropagation(); onTradeClick(f); }} className="px-3 py-1 rounded bg-indigo-600 text-white text-sm">Trade</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </section>
+
+        <aside className="space-y-6">
+          <div className={"rounded-2xl p-4 shadow-sm " + (dark ? "bg-slate-800" : "bg-white")}>
+            <h3 className="text-md font-semibold">Watchlist</h3>
+            <div className="mt-3 space-y-3">
+              {watchlist.map((w) => (
+                <div key={w.symbol} className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-medium">{w.symbol}</div>
+                    <div className="text-xs text-slate-400">{w.name}</div>
+                  </div>
+                  <div className={w.change >= 0 ? "text-emerald-500" : "text-rose-500"}>{w.change}%</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className={"rounded-2xl p-4 shadow-sm " + (dark ? "bg-slate-800" : "bg-white")}>
+            <h3 className="text-md font-semibold">Community Highlights</h3>
+            <div className="mt-3 space-y-3">
+              {samplePosts.slice(0, 3).map((p) => (
+                <div key={p.id} className="border rounded-md p-2">
+                  <div className="text-sm font-medium">{p.user}</div>
+                  <div className="text-sm text-slate-400">{new Date(p.time).toLocaleString()}</div>
+                  <div className="mt-2 text-sm">{p.text}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3">
+              <button onClick={() => setTab("community")} className="w-full py-2 rounded-md border">Open Community</button>
+            </div>
+          </div>
+
+          <div className={"rounded-2xl p-4 shadow-sm text-sm " + (dark ? "bg-slate-800" : "bg-white")}>
+            <div className="font-medium">Pro Tip</div>
+            <div className="text-slate-500 mt-2">Use the search to jump to any symbol. Connect API keys later to enable live prices.</div>
+          </div>
+        </aside>
+
+        {/* Community full-width when tab selected */}
+        {tab === "community" && (
+          <div className={"lg:col-span-3 rounded-2xl p-4 shadow-sm " + (dark ? "bg-slate-800" : "bg-white")}>
+            <h2 className="text-xl font-semibold">Community</h2>
+            <p className="text-slate-500 text-sm">Discuss trades, strategies, ideas and share charts. Be respectful.</p>
+
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const text = e.target.elements.post?.value?.trim();
+              if (!text) return;
+              const newPost = { id: Date.now(), user: 'You', text, likes: 0, time: new Date().toISOString() };
+              samplePosts.unshift(newPost);
+              e.target.reset();
+            }} className="mt-4">
+              <textarea name="post" rows={3} className="w-full p-3 border rounded-md" placeholder="Share a market idea or question..."></textarea>
+              <div className="mt-3 flex items-center justify-between">
+                <div className="text-xs text-slate-400">Public · Read the rules</div>
+                <button className="px-4 py-2 bg-indigo-600 text-white rounded-md">Post</button>
+              </div>
+            </form>
+
+            <div className="mt-6 space-y-4">
+              {samplePosts.map((p) => (
+                <div key={p.id} className="p-3 border rounded-md">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-medium">{p.user}</div>
+                      <div className="text-xs text-slate-400">{new Date(p.time).toLocaleString()}</div>
+                    </div>
+                    <div className="text-sm">{p.likes} ❤</div>
+                  </div>
+                  <div className="mt-2">{p.text}</div>
+                  <div className="mt-3 flex gap-2">
+                    <button onClick={() => onJoinDiscussion(p.user)} className="px-3 py-1 rounded border text-sm">Join Discussion</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* News Section (homepage) */}
+        <div className={"lg:col-span-3 rounded-2xl p-4 shadow-sm " + (dark ? "bg-slate-800" : "bg-white")}>
+          <h2 className="text-xl font-semibold">Market News</h2>
+          <p className="text-slate-500 text-sm">Latest headlines around Indian markets (demo)</p>
+
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+            {loadingNews ? (
+              Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="p-4 bg-gray-100 animate-pulse rounded" />
+              ))
+            ) : (
+              sampleNews.map((n, i) => (
+                <motion.div key={i} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }} className="p-4 border rounded hover:shadow cursor-pointer bg-white">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="font-semibold">{n.title}</div>
+                      <div className="text-sm text-slate-500 mt-1">{n.summary}</div>
+                      <div className="text-xs text-slate-400 mt-2">{n.source} · {n.timeAgo}</div>
+                    </div>
+                    <div className="ml-4 flex flex-col gap-2">
+                      <button onClick={() => onReadMore(n)} className="px-3 py-1 rounded border text-sm">Read More</button>
+                      <button onClick={() => alert('Saved for later')} className="px-3 py-1 rounded border text-sm">Save</button>
+                    </div>
+                  </div>
+                </motion.div>
+              ))
+            )}
+          </div>
+        </div>
+
+      </main>
+
+      {/* Modal */}
+      {modalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+          <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-11/12 max-w-3xl p-4">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-lg font-bold">{modalType === "news" ? modalData?.title : modalItemTitle(modalItem || modalData)}</h3>
+                <div className="text-sm text-slate-500">{modalType === "news" ? modalData?.source + ' · ' + modalData?.timeAgo : 'Mock chart & details'}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                {modalType === 'row' && (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <select value={range} onChange={(e) => setRange(e.target.value)} className="p-2 border rounded text-sm">
+                        <option value="1D">1D</option>
+                        <option value="7D">7D</option>
+                        <option value="1M">1M</option>
+                        <option value="3M">3M</option>
+                      </select>
+                      <button onClick={() => chartMode === 'candlestick' ? setChartMode('sparkline') : toggleToCandlestick()} className="px-3 py-1 rounded border text-sm">{chartMode === 'candlestick' ? 'Sparkline' : 'Candlestick'}</button>
+                    </div>
+                    <button onClick={() => { setModalType('trade'); }} className="px-3 py-1 rounded bg-emerald-500 text-white text-sm">Trade</button>
+                  </>
+                )}
+                <button onClick={closeModal} className="px-3 py-1 rounded border">Close</button>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              {modalType === 'news' && (
+                <div>
+                  <p className="text-sm text-slate-700">{modalData?.summary} (Full article body is demo content.)</p>
+                  <div className="mt-3 text-xs text-slate-400">Source: {modalData?.source}</div>
+                </div>
+              )}
+
+              {modalType === 'row' && modalItem && (
+                <div>
+                  <div style={{ minHeight: 220 }}>
+                    {chartMode === 'sparkline' && (
+                      <ResponsiveContainer width="100%" height={220}>
+                        <LineChart data={modalItem.spark}>
+                          <XAxis dataKey="time" hide />
+                          <YAxis hide />
+                          <Tooltip />
+                          <Line type="monotone" dataKey="value" stroke="#4F46E5" strokeWidth={2} dot={false} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    )}
+
+                    {chartMode === 'candlestick' && (
+                      candlestickLoading ? (
+                        <div className="h-56 w-full animate-pulse bg-gray-100 rounded" />
+                      ) : (
+                        <div>
+                          <ReactApexChart
+                            options={candlestickOptions(ohlcForRange(modalItem.ohlc, range))}
+                            series={candlestickSeries(ohlcForRange(modalItem.ohlc, range))}
+                            type="candlestick"
+                            height={320}
+                          />
+                        </div>
+                      )
+                    )}
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="p-3 bg-gray-50 rounded">Price: {modalItem.price ?? '-'}</div>
+                    <div className="p-3 bg-gray-50 rounded">Change: {modalItem.change ?? '-'}</div>
+                    <div className="p-3 bg-gray-50 rounded">Market cap / Liquidity: {modalItem.marketCap ?? modalItem.liquidity ?? '-'}</div>
+                  </div>
+                </div>
+              )}
+
+              {modalType === 'trade' && (
+                <div>
+                  <p className="text-sm text-slate-700">Mock trade form for <strong>{modalItem?.name || modalItem?.symbol || modalItem?.pair}</strong>. (Demo only)</p>
+                  <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <input placeholder="Quantity" className="p-2 border rounded" />
+                    <select className="p-2 border rounded">
+                      <option>Market</option>
+                      <option>Limit</option>
+                    </select>
+                  </div>
+                  <div className="mt-3 flex gap-2 justify-end">
+                    <button onClick={() => { alert('Order placed (demo)'); closeModal(); }} className="px-4 py-2 rounded bg-indigo-600 text-white">Buy</button>
+                    <button onClick={() => { alert('Sell order (demo)'); closeModal(); }} className="px-4 py-2 rounded bg-rose-500 text-white">Sell</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      <footer className={"mt-12 py-6 " + (dark ? "bg-slate-900 text-slate-400" : "bg-white text-slate-600")}>
+        <div className="max-w-6xl mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-4">
+          <div>© {new Date().getFullYear()} Stokastra — Indian stocks & forex market data (prototype)</div>
+          <div className="text-sm">Built with ❤️ · Inspired by CoinMarketCap's clean market-first layout</div>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+// ---------------- helpers & mock generators ----------------
+function makeStock(symbol, name, price) {
+  const change = Number(((Math.random() - 0.5) * 3).toFixed(2));
+  return { symbol, name, price, change, marketCap: `${Math.round(price * 1000000)} ` };
+}
+function makeForex(pair, price) {
+  const change = Number(((Math.random() - 0.5) * 1).toFixed(2));
+  return { pair, price, change, liquidity: Math.random() > 0.5 ? "High" : "Medium" };
+}
+function makeNews(title, summary, source) {
+  return { title, summary, source, timeAgo: `${Math.floor(Math.random() * 12) + 1}h` };
+}
+
+function generatePriceSeries(n, start = 1000) {
+  const out = [];
+  let v = start;
+  for (let i = 0; i < n; i++) {
+    v = v + (Math.random() - 0.48) * start * 0.004; // small noise
+    out.push({ time: i, value: Math.round(v * 100) / 100 });
+  }
+  return out;
+}
+
+function generateOHLCSeries(n, base = 1000) {
+  const out = [];
+  let prevClose = base;
+  for (let i = 0; i < n; i++) {
+    const open = Number((prevClose + (Math.random() - 0.5) * base * 0.01).toFixed(2));
+    const high = Number((open + Math.random() * base * 0.01).toFixed(2));
+    const low = Number((open - Math.random() * base * 0.01).toFixed(2));
+    const close = Number((low + Math.random() * (high - low)).toFixed(2));
+    out.push({ time: new Date(Date.now() - (n - i) * 3600 * 1000).toISOString(), open, high, low, close });
+    prevClose = close;
+  }
+  return out;
+}
+
+function modalItemTitle(item) {
+  if (!item) return "Details";
+  return item.name || item.symbol || item.pair || "Details";
+}
+
+function candlestickSeries(ohlc) {
+  return [
+    { data: (ohlc || []).map((d) => ({ x: d.time, y: [d.open, d.high, d.low, d.close] })) }
+  ];
+}
+function candlestickOptions(ohlc) {
+  return {
+    chart: {
+      type: 'candlestick',
+      height: 320,
+      toolbar: { show: true, tools: { zoom: true, pan: true, reset: true } },
+      background: 'transparent',
+    },
+    title: { text: '', style: { color: '#6b7280' } },
+    xaxis: { type: 'category', labels: { style: { colors: '#6b7280' } } },
+    yaxis: { tooltip: { enabled: true } },
+    tooltip: { theme: 'light' },
+    plotOptions: { candlestick: { colors: { upward: '#16a34a', downward: '#dc2626' } } },
+  };
+}
+
+function ohlcForRange(ohlc, rangeKey) {
+  if (!ohlc) return [];
+  const len = ohlc.length;
+  let n = 60;
+  switch (rangeKey) {
+    case '1D': n = Math.min(24, len); break;
+    case '7D': n = Math.min(40, len); break;
+    case '1M': n = Math.min(60, len); break;
+    case '3M': n = Math.min(60, len); break;
+    default: n = len;
+  }
+  return ohlc.slice(len - n);
+}
